@@ -21,7 +21,6 @@ def calculate_sha256(filename: str) -> str:
 
 # --- 1. MINIMAL DEPENDENCIES ---
 
-# We only keep OPUS. Your miner relies heavily on 'opus' inside 'webm'.
 codec_group = [
     Package(
         name="opus",
@@ -83,7 +82,7 @@ def download_tars(packages: list[Package]) -> None:
 def main():
     parser = argparse.ArgumentParser("build-ffmpeg")
     parser.add_argument("destination")
-    parser.add_argument("--community", action="store_true") # Retained for arg compatibility
+    parser.add_argument("--community", action="store_true")
 
     args = parser.parse_args()
 
@@ -124,7 +123,7 @@ def main():
 
     # --- 3. FFMPEG CONFIGURATION ---
     ffmpeg_package.build_arguments = [
-        "--disable-programs",      # You use PyAV, not ffmpeg.exe
+        "--disable-programs",      
         "--disable-doc",
         "--disable-libxml2",
         "--disable-lzma",
@@ -134,15 +133,12 @@ def main():
         "--disable-libbluray",
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
-        
-        # --- CRITICAL FIX FOR YOUR ERROR ---
-        "--disable-x86asm",        # Disable Assembly optimizations. Fixes "nasm not found".
-        # -----------------------------------
+        "--disable-x86asm",        # Disable Assembly optimizations (No NASM needed)
 
-        # Audio / Network / Device disabling
-        "--disable-alsa",          # No playback
-        "--disable-gnutls",        # No HTTPS (Python handles it)
-        "--disable-libxcb",        # No screen cap
+        # Disable all hardware/features
+        "--disable-alsa",
+        "--disable-gnutls",
+        "--disable-libxcb",
         "--disable-sdl2",
         "--disable-vulkan",
         "--disable-cuda",
@@ -153,7 +149,7 @@ def main():
         "--disable-audiotoolbox",
         "--disable-videotoolbox",
 
-        # Disable external libraries we removed
+        # Disable external libraries
         "--disable-libaom",
         "--disable-libdav1d",
         "--disable-libmp3lame",
@@ -171,11 +167,10 @@ def main():
         
         # Enable essentials
         "--enable-version3",
-        "--enable-zlib",           # Needed for MP4/MKV container structure
-        "--enable-libopus",        # Keep for stability
+        "--enable-zlib",
+        "--enable-libopus",
     ]
 
-    # Clean list of packages to build
     packages = []
     packages += codec_group
     packages += [ffmpeg_package]
@@ -190,16 +185,9 @@ def main():
 
     # --- 4. WINDOWS POST-PROCESSING ---
     if plat == "Windows":
-        # fix .lib files being installed in the wrong directory
         for name in (
-            "avcodec",
-            "avdevice",
-            "avfilter",
-            "avformat",
-            "avutil",
-            "postproc",
-            "swresample",
-            "swscale",
+            "avcodec", "avdevice", "avfilter", "avformat", "avutil",
+            "postproc", "swresample", "swscale",
         ):
             if os.path.exists(os.path.join(dest_dir, "bin", name + ".lib")):
                 shutil.move(
@@ -207,21 +195,12 @@ def main():
                     os.path.join(dest_dir, "lib"),
                 )
 
-        # copy some libraries provided by mingw (e.g. zlib, libgcc)
         try:
             mingw_bindir = os.path.dirname(
                 subprocess.run(["where", "gcc"], check=True, stdout=subprocess.PIPE)
-                .stdout.decode()
-                .splitlines()[0]
-                .strip()
+                .stdout.decode().splitlines()[0].strip()
             )
-            for name in (
-                "libgcc_s_seh-1.dll",
-                "libiconv-2.dll",
-                "libstdc++-6.dll",
-                "libwinpthread-1.dll",
-                "zlib1.dll",
-            ):
+            for name in ("libgcc_s_seh-1.dll", "libiconv-2.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "zlib1.dll"):
                 src = os.path.join(mingw_bindir, name)
                 if os.path.exists(src):
                     shutil.copy(src, os.path.join(dest_dir, "bin"))
@@ -229,7 +208,6 @@ def main():
             print(f"Warning: Could not copy MinGW DLLs: {e}")
 
     # --- 5. FINALIZE ---
-    # find libraries
     if plat == "Darwin":
         libraries = glob.glob(os.path.join(dest_dir, "lib", "*.dylib"))
     elif plat == "Linux":
@@ -237,7 +215,6 @@ def main():
     elif plat == "Windows":
         libraries = glob.glob(os.path.join(dest_dir, "bin", "*.dll"))
 
-    # strip libraries
     if libraries:
         if plat == "Darwin":
             run(["strip", "-S"] + libraries)
@@ -248,9 +225,15 @@ def main():
         else:
             run(["strip", "-s"] + libraries)
 
-    # build output tarball
+    # --- FIX: Only archive folders that exist ---
     os.makedirs(output_dir, exist_ok=True)
-    run(["tar", "czvf", output_tarball, "-C", dest_dir, "bin", "include", "lib"])
+    
+    dirs_to_archive = []
+    for d in ["bin", "include", "lib"]:
+        if os.path.exists(os.path.join(dest_dir, d)):
+            dirs_to_archive.append(d)
+
+    run(["tar", "czvf", output_tarball, "-C", dest_dir] + dirs_to_archive)
 
 
 if __name__ == "__main__":
