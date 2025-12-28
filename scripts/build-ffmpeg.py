@@ -7,6 +7,7 @@ import platform
 import shutil
 import subprocess
 
+# Ensure cibuildpkg is installed/available in your environment
 from cibuildpkg import Builder, Package, fetch, get_platform, log_group, run
 
 plat = platform.system()
@@ -20,11 +21,7 @@ def calculate_sha256(filename: str) -> str:
 
 # --- 1. MINIMAL DEPENDENCIES ---
 
-# We remove library_group (GMP/Nettle) and gnutls_group entirely.
-# We remove alsa_package, nvheaders, amfheaders.
-
-# We only keep OPUS. Your miner handles WebM/Opus streams often.
-# Keeping external libopus is safer for PyAV's header parsing than FFmpeg's internal one.
+# We only keep OPUS. Your miner relies heavily on 'opus' inside 'webm'.
 codec_group = [
     Package(
         name="opus",
@@ -106,14 +103,14 @@ def main():
     # --- 2. TOOLS ---
     available_tools = set()
     if plat == "Windows":
-        # We removed nasm dependence because we removed x264/x265/vpx
         available_tools.update(["gperf"]) 
         print("PATH", os.environ["PATH"])
         for tool in ["gcc", "g++", "curl", "gperf", "ld", "pkg-config"]:
             run(["where", tool])
 
-    # We removed 'cmake', 'meson', 'ninja' from pip install because 
-    # Opus uses Autoconf (make), and we removed the libs that needed the others.
+    # Standard python tools
+    with log_group("install python packages"):
+        run(["pip", "install", "cmake==3.31.6", "meson", "ninja"])
     
     build_tools = []
     if "gperf" not in available_tools:
@@ -138,6 +135,10 @@ def main():
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
         
+        # --- CRITICAL FIX FOR YOUR ERROR ---
+        "--disable-x86asm",        # Disable Assembly optimizations. Fixes "nasm not found".
+        # -----------------------------------
+
         # Audio / Network / Device disabling
         "--disable-alsa",          # No playback
         "--disable-gnutls",        # No HTTPS (Python handles it)
