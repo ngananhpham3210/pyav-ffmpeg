@@ -18,9 +18,8 @@ def calculate_sha256(filename: str) -> str:
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
-# --- 1. DEFINE AUDIO PACKAGES ONLY ---
-# We have restored all audio-related libraries from the original script.
-# We have removed video (x264, x265, vpx, aom, dav1d) and images (png, webp).
+# --- 1. DEFINE AUDIO PACKAGES ---
+# We enable all audio codecs requested, including the non-free fdk-aac.
 
 audio_group = [
     Package(
@@ -61,7 +60,6 @@ audio_group = [
         name="fdk_aac",
         source_url="https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz",
         sha256="e25671cd96b10bad896aa42ab91a695a9e573395262baed4e4a2ff178d6a3a78",
-        # We enable this for high quality AAC
         build_system="cmake",
     ),
     Package(
@@ -118,7 +116,7 @@ def download_tars(packages: list[Package]) -> None:
 def main():
     parser = argparse.ArgumentParser("build-ffmpeg")
     parser.add_argument("destination")
-    parser.add_argument("--community", action="store_true") # Kept for CLI compat
+    parser.add_argument("--community", action="store_true")
 
     args = parser.parse_args()
     dest_dir = os.path.abspath(args.destination)
@@ -134,16 +132,12 @@ def main():
     builder = Builder(dest_dir=dest_dir)
     builder.create_directories()
 
-    # --- TOOLS SETUP ---
     available_tools = set()
     if plat == "Windows":
         available_tools.update(["gperf"]) 
-        # We generally don't need nasm if we disable x86asm, but some audio libs might use it if present.
-        # Safe to skip since we disable-x86asm in FFmpeg.
         for tool in ["gcc", "g++", "curl", "gperf", "ld", "pkg-config"]:
             run(["where", tool])
 
-    # We need cmake for fdk-aac
     with log_group("install python packages"):
         run(["pip", "install", "cmake==3.31.6", "meson", "ninja"])
     
@@ -157,26 +151,32 @@ def main():
             )
         )
 
-    # --- FFMPEG CONFIGURATION (AUDIO ALL, VIDEO/NET NONE) ---
+    # --- FFMPEG CONFIGURATION ---
     ffmpeg_package.build_arguments = [
-        # --- 1. GENERAL ---
-        "--disable-programs",      # No ffmpeg.exe
+        # 1. BASICS
+        "--disable-programs",
         "--disable-doc",
         "--disable-libxml2",
         "--disable-lzma",
-        "--disable-libtheora",     # Theora is video
+        "--disable-libtheora",
         "--disable-libfreetype",
         "--disable-libfontconfig",
         "--disable-libbluray",
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
-        "--disable-x86asm",        # Disable assembly (removes NASM requirement)
-        "--enable-version3",       # License compatibility
-        "--enable-zlib",           # Required for containers
+        "--disable-x86asm",         # NO NASM
+        
+        # 2. LICENSE FLAGS - FIX IS HERE
+        "--enable-version3",
+        "--enable-gpl",             # Fixes compatibility between GPLv3 and libs
+        "--enable-nonfree",         # Fixes 'libfdk_aac is non-free' error
 
-        # --- 2. DISABLE VIDEO & NETWORK & HW ---
-        "--disable-video",         # <--- KEY: Kills all video logic
-        "--disable-network",       # <--- KEY: Kills all network protocols
+        # 3. CORE LIBS
+        "--enable-zlib",
+
+        # 4. DISABLE VIDEO/NET/HW
+        "--disable-video",          # Removes video logic
+        "--disable-network",        # Removes network logic
         "--disable-libxcb",
         "--disable-sdl2",
         "--disable-vulkan",
@@ -187,10 +187,10 @@ def main():
         "--disable-amf",
         "--disable-audiotoolbox",
         "--disable-videotoolbox",
-        "--disable-indevs",        # Disable input devices (webcams, mics)
-        "--disable-outdevs",       # Disable output devices (speakers)
+        "--disable-indevs",
+        "--disable-outdevs",
 
-        # --- 3. ENABLE EXTERNAL AUDIO LIBRARIES ---
+        # 5. ENABLE AUDIO LIBS
         "--enable-libmp3lame",
         "--enable-libopus",
         "--enable-libvorbis",
@@ -198,9 +198,9 @@ def main():
         "--enable-libspeex",
         "--enable-libopencore-amrnb",
         "--enable-libopencore-amrwb",
-        "--enable-libfdk-aac",     # High quality AAC
+        "--enable-libfdk-aac",
 
-        # --- 4. DISABLE EXTERNAL VIDEO LIBRARIES ---
+        # 6. DISABLE VIDEO LIBS
         "--disable-libaom",
         "--disable-libdav1d",
         "--disable-libsvtav1",
@@ -211,7 +211,6 @@ def main():
         "--disable-libx265",
     ]
 
-    # Combine packages
     packages = []
     packages += audio_group
     packages += [ffmpeg_package]
@@ -224,7 +223,6 @@ def main():
     for package in packages:
         builder.build(package)
 
-    # --- WINDOWS FIXES ---
     if plat == "Windows":
         for name in (
             "avcodec", "avdevice", "avfilter", "avformat", "avutil",
@@ -240,7 +238,6 @@ def main():
                 subprocess.run(["where", "gcc"], check=True, stdout=subprocess.PIPE)
                 .stdout.decode().splitlines()[0].strip()
             )
-            # Copy runtime dlls
             for name in ("libgcc_s_seh-1.dll", "libiconv-2.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "zlib1.dll"):
                 src = os.path.join(mingw_bindir, name)
                 if os.path.exists(src):
@@ -248,7 +245,6 @@ def main():
         except Exception:
             pass
 
-    # --- STRIP BINARIES ---
     if plat == "Darwin":
         libraries = glob.glob(os.path.join(dest_dir, "lib", "*.dylib"))
     elif plat == "Linux":
@@ -266,10 +262,9 @@ def main():
         else:
             run(["strip", "-s"] + libraries)
 
-    # --- CREATE ARCHIVE ---
     os.makedirs(output_dir, exist_ok=True)
     
-    # Only archive folders that actually exist to avoid "Cannot stat" error
+    # Check folders before archiving to avoid errors if bin/include are empty
     dirs_to_archive = []
     for d in ["bin", "include", "lib"]:
         if os.path.exists(os.path.join(dest_dir, d)):
