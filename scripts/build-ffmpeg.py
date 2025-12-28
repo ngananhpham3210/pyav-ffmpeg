@@ -7,8 +7,7 @@ import platform
 import shutil
 import subprocess
 
-# Ensure cibuildpkg is installed/available in your environment
-from cibuildpkg import Builder, Package, fetch, get_platform, log_group, run
+from cibuildpkg import Builder, Package, fetch, get_platform, log_group, run, When
 
 plat = platform.system()
 
@@ -19,14 +18,57 @@ def calculate_sha256(filename: str) -> str:
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
 
-# --- 1. MINIMAL DEPENDENCIES ---
+# --- 1. DEFINE AUDIO PACKAGES ONLY ---
+# We have restored all audio-related libraries from the original script.
+# We have removed video (x264, x265, vpx, aom, dav1d) and images (png, webp).
 
-codec_group = [
+audio_group = [
+    Package(
+        name="lame",
+        source_url="http://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz",
+        sha256="ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
+    ),
+    Package(
+        name="ogg",
+        source_url="http://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz",
+        sha256="0eb4b4b9420a0f51db142ba3f9c64b333f826532dc0f48c6410ae51f4799b664",
+    ),
     Package(
         name="opus",
         source_url="https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.tar.gz",
         sha256="b7637334527201fdfd6dd6a02e67aceffb0e5e60155bbd89175647a80301c92c",
         build_arguments=["--disable-doc", "--disable-extra-programs"],
+    ),
+    Package(
+        name="speex",
+        source_url="http://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz",
+        sha256="4b44d4f2b38a370a2d98a78329fefc56a0cf93d1c1be70029217baae6628feea",
+        build_arguments=["--disable-binaries"],
+    ),
+    Package(
+        name="twolame",
+        source_url="http://deb.debian.org/debian/pool/main/t/twolame/twolame_0.4.0.orig.tar.gz",
+        sha256="cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d",
+        build_arguments=["--disable-sndfile"],
+    ),
+    Package(
+        name="vorbis",
+        source_url="https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.xz",
+        sha256="b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
+        requires=["ogg"],
+    ),
+    Package(
+        name="fdk_aac",
+        source_url="https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz",
+        sha256="e25671cd96b10bad896aa42ab91a695a9e573395262baed4e4a2ff178d6a3a78",
+        # We enable this for high quality AAC
+        build_system="cmake",
+    ),
+    Package(
+        name="opencore-amr",
+        source_url="http://deb.debian.org/debian/pool/main/o/opencore-amr/opencore-amr_0.1.5.orig.tar.gz",
+        sha256="2c006cb9d5f651bfb5e60156dbff6af3c9d35c7bbcc9015308c0aff1e14cd341",
+        build_parallel=plat != "Windows",
     ),
 ]
 
@@ -44,23 +86,18 @@ def download_and_verify_package(package: Package) -> None:
         os.path.abspath("source"),
         package.source_filename or package.source_url.split("/")[-1],
     )
-
     if not os.path.exists(tarball):
         try:
             fetch(package.source_url, tarball)
         except subprocess.CalledProcessError:
             pass
-
     if not os.path.exists(tarball):
         raise ValueError(f"tar bar doesn't exist: {tarball}")
-
     sha = calculate_sha256(tarball)
     if package.sha256 == sha:
         print(f"{package.name} tarball: hashes match")
     else:
-        raise ValueError(
-            f"sha256 hash of {package.name} tarball do not match!\nExpected: {package.sha256}\nGot: {sha}"
-        )
+        raise ValueError(f"sha256 mismatch for {package.name}")
 
 
 def download_tars(packages: list[Package]) -> None:
@@ -69,7 +106,6 @@ def download_tars(packages: list[Package]) -> None:
             executor.submit(download_and_verify_package, package): package.name
             for package in packages
         }
-
         for future in concurrent.futures.as_completed(future_to_package):
             name = future_to_package[future]
             try:
@@ -82,10 +118,9 @@ def download_tars(packages: list[Package]) -> None:
 def main():
     parser = argparse.ArgumentParser("build-ffmpeg")
     parser.add_argument("destination")
-    parser.add_argument("--community", action="store_true")
+    parser.add_argument("--community", action="store_true") # Kept for CLI compat
 
     args = parser.parse_args()
-
     dest_dir = os.path.abspath(args.destination)
 
     output_dir = os.path.abspath("output")
@@ -99,15 +134,16 @@ def main():
     builder = Builder(dest_dir=dest_dir)
     builder.create_directories()
 
-    # --- 2. TOOLS ---
+    # --- TOOLS SETUP ---
     available_tools = set()
     if plat == "Windows":
         available_tools.update(["gperf"]) 
-        print("PATH", os.environ["PATH"])
+        # We generally don't need nasm if we disable x86asm, but some audio libs might use it if present.
+        # Safe to skip since we disable-x86asm in FFmpeg.
         for tool in ["gcc", "g++", "curl", "gperf", "ld", "pkg-config"]:
             run(["where", tool])
 
-    # Standard python tools
+    # We need cmake for fdk-aac
     with log_group("install python packages"):
         run(["pip", "install", "cmake==3.31.6", "meson", "ninja"])
     
@@ -121,23 +157,26 @@ def main():
             )
         )
 
-    # --- 3. FFMPEG CONFIGURATION ---
+    # --- FFMPEG CONFIGURATION (AUDIO ALL, VIDEO/NET NONE) ---
     ffmpeg_package.build_arguments = [
-        "--disable-programs",      
+        # --- 1. GENERAL ---
+        "--disable-programs",      # No ffmpeg.exe
         "--disable-doc",
         "--disable-libxml2",
         "--disable-lzma",
-        "--disable-libtheora",
+        "--disable-libtheora",     # Theora is video
         "--disable-libfreetype",
         "--disable-libfontconfig",
         "--disable-libbluray",
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
-        "--disable-x86asm",        # Disable Assembly optimizations (No NASM needed)
+        "--disable-x86asm",        # Disable assembly (removes NASM requirement)
+        "--enable-version3",       # License compatibility
+        "--enable-zlib",           # Required for containers
 
-        # Disable all hardware/features
-        "--disable-alsa",
-        "--disable-gnutls",
+        # --- 2. DISABLE VIDEO & NETWORK & HW ---
+        "--disable-video",         # <--- KEY: Kills all video logic
+        "--disable-network",       # <--- KEY: Kills all network protocols
         "--disable-libxcb",
         "--disable-sdl2",
         "--disable-vulkan",
@@ -148,31 +187,33 @@ def main():
         "--disable-amf",
         "--disable-audiotoolbox",
         "--disable-videotoolbox",
+        "--disable-indevs",        # Disable input devices (webcams, mics)
+        "--disable-outdevs",       # Disable output devices (speakers)
 
-        # Disable external libraries
+        # --- 3. ENABLE EXTERNAL AUDIO LIBRARIES ---
+        "--enable-libmp3lame",
+        "--enable-libopus",
+        "--enable-libvorbis",
+        "--enable-libtwolame",
+        "--enable-libspeex",
+        "--enable-libopencore-amrnb",
+        "--enable-libopencore-amrwb",
+        "--enable-libfdk-aac",     # High quality AAC
+
+        # --- 4. DISABLE EXTERNAL VIDEO LIBRARIES ---
         "--disable-libaom",
         "--disable-libdav1d",
-        "--disable-libmp3lame",
-        "--disable-libopencore-amrnb",
-        "--disable-libopencore-amrwb",
-        "--disable-libspeex",
         "--disable-libsvtav1",
-        "--disable-libtwolame",
-        "--disable-libvorbis",
         "--disable-libvpx",
         "--disable-libwebp",
         "--disable-libopenh264",
         "--disable-libx264",
         "--disable-libx265",
-        
-        # Enable essentials
-        "--enable-version3",
-        "--enable-zlib",
-        "--enable-libopus",
     ]
 
+    # Combine packages
     packages = []
-    packages += codec_group
+    packages += audio_group
     packages += [ffmpeg_package]
 
     download_tars(build_tools + packages)
@@ -183,7 +224,7 @@ def main():
     for package in packages:
         builder.build(package)
 
-    # --- 4. WINDOWS POST-PROCESSING ---
+    # --- WINDOWS FIXES ---
     if plat == "Windows":
         for name in (
             "avcodec", "avdevice", "avfilter", "avformat", "avutil",
@@ -194,20 +235,20 @@ def main():
                     os.path.join(dest_dir, "bin", name + ".lib"),
                     os.path.join(dest_dir, "lib"),
                 )
-
         try:
             mingw_bindir = os.path.dirname(
                 subprocess.run(["where", "gcc"], check=True, stdout=subprocess.PIPE)
                 .stdout.decode().splitlines()[0].strip()
             )
+            # Copy runtime dlls
             for name in ("libgcc_s_seh-1.dll", "libiconv-2.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "zlib1.dll"):
                 src = os.path.join(mingw_bindir, name)
                 if os.path.exists(src):
                     shutil.copy(src, os.path.join(dest_dir, "bin"))
-        except Exception as e:
-            print(f"Warning: Could not copy MinGW DLLs: {e}")
+        except Exception:
+            pass
 
-    # --- 5. FINALIZE ---
+    # --- STRIP BINARIES ---
     if plat == "Darwin":
         libraries = glob.glob(os.path.join(dest_dir, "lib", "*.dylib"))
     elif plat == "Linux":
@@ -225,9 +266,10 @@ def main():
         else:
             run(["strip", "-s"] + libraries)
 
-    # --- FIX: Only archive folders that exist ---
+    # --- CREATE ARCHIVE ---
     os.makedirs(output_dir, exist_ok=True)
     
+    # Only archive folders that actually exist to avoid "Cannot stat" error
     dirs_to_archive = []
     for d in ["bin", "include", "lib"]:
         if os.path.exists(os.path.join(dest_dir, d)):
