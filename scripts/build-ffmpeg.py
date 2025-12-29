@@ -19,7 +19,6 @@ def calculate_sha256(filename: str) -> str:
     return sha256_hash.hexdigest()
 
 # --- 1. DEFINE AUDIO PACKAGES ---
-# We enable all audio codecs requested, including the non-free fdk-aac.
 
 audio_group = [
     Package(
@@ -164,19 +163,20 @@ def main():
         "--disable-libbluray",
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
-        "--disable-x86asm",         # NO NASM
+        "--disable-x86asm",
         
-        # 2. LICENSE FLAGS - FIX IS HERE
+        # 2. LICENSE FLAGS
         "--enable-version3",
-        "--enable-gpl",             # Fixes compatibility between GPLv3 and libs
-        "--enable-nonfree",         # Fixes 'libfdk_aac is non-free' error
+        "--enable-gpl",
+        "--enable-nonfree",
 
         # 3. CORE LIBS
         "--enable-zlib",
 
         # 4. DISABLE VIDEO/NET/HW
-        "--disable-video",          # Removes video logic
-        "--disable-network",        # Removes network logic
+        # Note: "--disable-video" does not exist in FFmpeg configure.
+        # We rely on disabling specific heavy video libs and hwaccels below.
+        "--disable-network",
         "--disable-libxcb",
         "--disable-sdl2",
         "--disable-vulkan",
@@ -200,7 +200,7 @@ def main():
         "--enable-libopencore-amrwb",
         "--enable-libfdk-aac",
 
-        # 6. DISABLE VIDEO LIBS
+        # 6. DISABLE VIDEO LIBS (This removes the bulk of video support)
         "--disable-libaom",
         "--disable-libdav1d",
         "--disable-libsvtav1",
@@ -264,7 +264,6 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
     
-    # Check folders before archiving to avoid errors if bin/include are empty
     dirs_to_archive = []
     for d in ["bin", "include", "lib"]:
         if os.path.exists(os.path.join(dest_dir, d)):
