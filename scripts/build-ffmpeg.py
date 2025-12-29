@@ -19,6 +19,8 @@ def calculate_sha256(filename: str) -> str:
     return sha256_hash.hexdigest()
 
 # --- 1. DEFINE AUDIO PACKAGES ---
+# All video libraries have been removed. 
+# We include FDK-AAC (Non-free) for best audio quality.
 
 audio_group = [
     Package(
@@ -137,6 +139,7 @@ def main():
         for tool in ["gcc", "g++", "curl", "gperf", "ld", "pkg-config"]:
             run(["where", tool])
 
+    # Install build systems needed for fdk-aac (cmake)
     with log_group("install python packages"):
         run(["pip", "install", "cmake==3.31.6", "meson", "ninja"])
     
@@ -152,7 +155,7 @@ def main():
 
     # --- FFMPEG CONFIGURATION ---
     ffmpeg_package.build_arguments = [
-        # 1. BASICS
+        # --- 1. GENERAL & LICENSING ---
         "--disable-programs",
         "--disable-doc",
         "--disable-libxml2",
@@ -163,20 +166,18 @@ def main():
         "--disable-libbluray",
         "--disable-libopenjpeg",
         "--disable-mediafoundation",
-        "--disable-x86asm",
+        "--disable-x86asm",         # Disable assembly (No NASM needed)
         
-        # 2. LICENSE FLAGS
         "--enable-version3",
-        "--enable-gpl",
-        "--enable-nonfree",
+        "--enable-gpl",             # Required for mixing libs
+        "--enable-nonfree",         # Required for libfdk_aac
 
-        # 3. CORE LIBS
+        # --- 2. CORE LIBS ---
         "--enable-zlib",
 
-        # 4. DISABLE VIDEO/NET/HW
-        # Note: "--disable-video" does not exist in FFmpeg configure.
-        # We rely on disabling specific heavy video libs and hwaccels below.
-        "--disable-network",
+        # --- 3. DISABLE VIDEO HARDWARE & NETWORK ---
+        "--disable-hwaccels",       # <--- Disables Video Hardware Acceleration
+        "--disable-network",        # <--- Disables Networking
         "--disable-libxcb",
         "--disable-sdl2",
         "--disable-vulkan",
@@ -187,10 +188,13 @@ def main():
         "--disable-amf",
         "--disable-audiotoolbox",
         "--disable-videotoolbox",
-        "--disable-indevs",
-        "--disable-outdevs",
+        "--disable-indevs",         # Disable capture devices
+        "--disable-outdevs",        # Disable playback devices
+        "--disable-v4l2-m2m",       # Disable Video4Linux
+        "--disable-vaapi",          # Disable Video Acceleration API
+        "--disable-vdpau",          # Disable Video Decode (Nvidia)
 
-        # 5. ENABLE AUDIO LIBS
+        # --- 4. ENABLE EXTERNAL AUDIO LIBS ---
         "--enable-libmp3lame",
         "--enable-libopus",
         "--enable-libvorbis",
@@ -200,7 +204,7 @@ def main():
         "--enable-libopencore-amrwb",
         "--enable-libfdk-aac",
 
-        # 6. DISABLE VIDEO LIBS (This removes the bulk of video support)
+        # --- 5. DISABLE EXTERNAL VIDEO LIBS ---
         "--disable-libaom",
         "--disable-libdav1d",
         "--disable-libsvtav1",
@@ -223,6 +227,7 @@ def main():
     for package in packages:
         builder.build(package)
 
+    # Windows DLL Fixes
     if plat == "Windows":
         for name in (
             "avcodec", "avdevice", "avfilter", "avformat", "avutil",
@@ -245,6 +250,7 @@ def main():
         except Exception:
             pass
 
+    # Strip Binaries
     if plat == "Darwin":
         libraries = glob.glob(os.path.join(dest_dir, "lib", "*.dylib"))
     elif plat == "Linux":
@@ -262,8 +268,10 @@ def main():
         else:
             run(["strip", "-s"] + libraries)
 
+    # Archive
     os.makedirs(output_dir, exist_ok=True)
     
+    # Check what exists before archiving
     dirs_to_archive = []
     for d in ["bin", "include", "lib"]:
         if os.path.exists(os.path.join(dest_dir, d)):
