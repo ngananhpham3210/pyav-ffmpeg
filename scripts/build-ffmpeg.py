@@ -19,8 +19,9 @@ def calculate_sha256(filename: str) -> str:
     return sha256_hash.hexdigest()
 
 # --- 1. DEFINE AUDIO PACKAGES ---
-# All video libraries have been removed. 
-# We include FDK-AAC (Non-free) for best audio quality.
+# All video libraries removed. 
+# Matches document 1: LAME, OGG, OPUS, VORBIS, SPEEX
+# REMOVED: fdk-aac (non-free licensing issue)
 
 audio_group = [
     Package(
@@ -46,28 +47,10 @@ audio_group = [
         build_arguments=["--disable-binaries"],
     ),
     Package(
-        name="twolame",
-        source_url="http://deb.debian.org/debian/pool/main/t/twolame/twolame_0.4.0.orig.tar.gz",
-        sha256="cc35424f6019a88c6f52570b63e1baf50f62963a3eac52a03a800bb070d7c87d",
-        build_arguments=["--disable-sndfile"],
-    ),
-    Package(
         name="vorbis",
         source_url="https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.xz",
         sha256="b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b",
         requires=["ogg"],
-    ),
-    Package(
-        name="fdk_aac",
-        source_url="https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz",
-        sha256="e25671cd96b10bad896aa42ab91a695a9e573395262baed4e4a2ff178d6a3a78",
-        build_system="cmake",
-    ),
-    Package(
-        name="opencore-amr",
-        source_url="http://deb.debian.org/debian/pool/main/o/opencore-amr/opencore-amr_0.1.5.orig.tar.gz",
-        sha256="2c006cb9d5f651bfb5e60156dbff6af3c9d35c7bbcc9015308c0aff1e14cd341",
-        build_parallel=plat != "Windows",
     ),
 ]
 
@@ -139,7 +122,7 @@ def main():
         for tool in ["gcc", "g++", "curl", "gperf", "ld", "pkg-config"]:
             run(["where", tool])
 
-    # Install build systems needed for fdk-aac (cmake)
+    # Install build systems
     with log_group("install python packages"):
         run(["pip", "install", "cmake==3.31.6", "meson", "ninja"])
     
@@ -153,58 +136,123 @@ def main():
             )
         )
 
-    # --- FFMPEG CONFIGURATION ---
+    # --- ULTRA-MINIMAL AUDIO-ONLY FFMPEG CONFIGURATION ---
+    # Aligned with document 1's audio-only build strategy
+    print("=" * 50)
+    print("Building ULTRA-MINIMAL AUDIO-ONLY FFmpeg")
+    print("No Video | No Images | No Network")
+    print("=" * 50)
+    
     ffmpeg_package.build_arguments = [
-        # --- 1. GENERAL & LICENSING ---
-        "--disable-programs",
-        "--disable-doc",
-        "--disable-libxml2",
-        "--disable-lzma",
-        "--disable-libtheora",
-        "--disable-libfreetype",
-        "--disable-libfontconfig",
-        "--disable-libbluray",
-        "--disable-libopenjpeg",
-        "--disable-mediafoundation",
-        "--disable-x86asm",         # Disable assembly (No NASM needed)
+        # === DISABLE PROGRAMS ===
+        "--disable-ffmpeg",
+        "--disable-ffplay",
+        "--disable-ffprobe",
         
-        "--enable-version3",
-        "--enable-gpl",             # Required for mixing libs
-        "--enable-nonfree",         # Required for libfdk_aac
-
-        # --- 2. CORE LIBS ---
-        "--enable-zlib",
-
-        # --- 3. DISABLE VIDEO HARDWARE & NETWORK ---
-        "--disable-hwaccels",       # <--- Disables Video Hardware Acceleration
-        "--disable-network",        # <--- Disables Networking
-        "--disable-libxcb",
-        "--disable-sdl2",
-        "--disable-vulkan",
+        # === DISABLE DOCUMENTATION ===
+        "--disable-doc",
+        "--disable-htmlpages",
+        "--disable-manpages",
+        "--disable-podpages",
+        "--disable-txtpages",
+        
+        # === DISABLE NETWORK (NO STREAMING) ===
+        "--disable-network",
+        
+        # === DISABLE ALL HARDWARE ACCELERATION ===
+        "--disable-hwaccels",
         "--disable-cuda",
+        "--disable-cuda-llvm",
         "--disable-cuvid",
         "--disable-nvenc",
         "--disable-nvdec",
         "--disable-amf",
         "--disable-audiotoolbox",
         "--disable-videotoolbox",
-        "--disable-indevs",         # Disable capture devices
-        "--disable-outdevs",        # Disable playback devices
-        "--disable-v4l2-m2m",       # Disable Video4Linux
-        "--disable-vaapi",          # Disable Video Acceleration API
-        "--disable-vdpau",          # Disable Video Decode (Nvidia)
-
-        # --- 4. ENABLE EXTERNAL AUDIO LIBS ---
-        "--enable-libmp3lame",
-        "--enable-libopus",
-        "--enable-libvorbis",
-        "--enable-libtwolame",
-        "--enable-libspeex",
-        "--enable-libopencore-amrnb",
-        "--enable-libopencore-amrwb",
-        "--enable-libfdk-aac",
-
-        # --- 5. DISABLE EXTERNAL VIDEO LIBS ---
+        "--disable-v4l2-m2m",
+        "--disable-vaapi",
+        "--disable-vdpau",
+        "--disable-d3d11va",
+        "--disable-dxva2",
+        "--disable-mediacodec",
+        "--disable-mmal",
+        "--disable-omx",
+        "--disable-rkmpp",
+        
+        # === DISABLE VIDEO CODECS (BUILT-IN) ===
+        "--disable-decoder=h264",
+        "--disable-decoder=hevc",
+        "--disable-decoder=vp8",
+        "--disable-decoder=vp9",
+        "--disable-decoder=av1",
+        "--disable-decoder=mpeg2video",
+        "--disable-decoder=mpeg4",
+        "--disable-decoder=msmpeg4v2",
+        "--disable-decoder=msmpeg4v3",
+        "--disable-encoder=h264",
+        "--disable-encoder=hevc",
+        "--disable-encoder=vp8",
+        "--disable-encoder=vp9",
+        "--disable-encoder=av1",
+        "--disable-encoder=mpeg2video",
+        "--disable-encoder=mpeg4",
+        
+        # === DISABLE ALL IMAGE FORMATS ===
+        "--disable-decoder=bmp",
+        "--disable-decoder=png",
+        "--disable-decoder=jpeg2000",
+        "--disable-decoder=mjpeg",
+        "--disable-decoder=mjpegb",
+        "--disable-decoder=gif",
+        "--disable-decoder=tiff",
+        "--disable-decoder=webp",
+        "--disable-encoder=bmp",
+        "--disable-encoder=png",
+        "--disable-encoder=mjpeg",
+        "--disable-encoder=gif",
+        "--disable-encoder=tiff",
+        "--disable-encoder=webp",
+        
+        # === DISABLE ALL, THEN ENABLE ONLY AUDIO ===
+        "--disable-encoders",
+        "--disable-decoders",
+        "--enable-decoder=mp3*",
+        "--enable-decoder=aac*",
+        "--enable-decoder=opus",
+        "--enable-decoder=vorbis",
+        "--enable-decoder=flac",
+        "--enable-decoder=alac",
+        "--enable-decoder=pcm*",
+        "--enable-decoder=adpcm*",
+        "--enable-decoder=wavpack",
+        "--enable-encoder=aac",
+        "--enable-encoder=libmp3lame",
+        "--enable-encoder=libopus",
+        "--enable-encoder=libvorbis",
+        "--enable-encoder=flac",
+        "--enable-encoder=alac",
+        "--enable-encoder=pcm*",
+        "--enable-encoder=wavpack",
+        
+        # === DISABLE INPUT/OUTPUT DEVICES ===
+        "--disable-indevs",
+        "--disable-outdevs",
+        
+        # === DISABLE ALL FILTERS, ENABLE ONLY AUDIO ===
+        "--disable-filters",
+        "--enable-filter=aresample",
+        "--enable-filter=aformat",
+        "--enable-filter=anull",
+        "--enable-filter=atrim",
+        "--enable-filter=volume",
+        "--enable-filter=pan",
+        "--enable-filter=amerge",
+        "--enable-filter=aconvert",
+        "--enable-filter=asplit",
+        "--enable-filter=channelmap",
+        "--enable-filter=channelsplit",
+        
+        # === DISABLE EXTERNAL VIDEO LIBRARIES ===
         "--disable-libaom",
         "--disable-libdav1d",
         "--disable-libsvtav1",
@@ -213,6 +261,67 @@ def main():
         "--disable-libopenh264",
         "--disable-libx264",
         "--disable-libx265",
+        "--disable-libxvid",
+        "--disable-libtheora",
+        "--disable-libopenjpeg",
+        
+        # === DISABLE MISC VIDEO/IMAGE FEATURES ===
+        "--disable-libxml2",
+        "--disable-lzma",
+        "--disable-bzlib",
+        "--disable-iconv",
+        "--disable-libfreetype",
+        "--disable-libfontconfig",
+        "--disable-libbluray",
+        "--disable-sdl2",
+        "--disable-libxcb",
+        "--disable-vulkan",
+        "--disable-opengl",
+        "--disable-opencl",
+        "--disable-mediafoundation",
+        
+        # === DISABLE ALL PROTOCOLS, ENABLE ONLY FILE ===
+        "--disable-protocols",
+        "--enable-protocol=file",
+        "--enable-protocol=pipe",
+        
+        # === DISABLE ASSEMBLY (NO NASM NEEDED) ===
+        "--disable-x86asm",
+        "--disable-inline-asm",
+        "--disable-asm",
+        
+        # === ENABLE ONLY AUDIO-RELATED ===
+        "--enable-gpl",
+        "--enable-version3",
+        "--enable-zlib",
+        "--enable-libmp3lame",
+        "--enable-libopus",
+        "--enable-libvorbis",
+        "--enable-libspeex",
+        
+        # === ENABLE AUDIO DEMUXERS ===
+        "--enable-demuxer=mp3",
+        "--enable-demuxer=ogg",
+        "--enable-demuxer=flac",
+        "--enable-demuxer=wav",
+        "--enable-demuxer=aac",
+        "--enable-demuxer=m4a",
+        "--enable-demuxer=mov",
+        
+        # === ENABLE AUDIO MUXERS ===
+        "--enable-muxer=mp3",
+        "--enable-muxer=ogg",
+        "--enable-muxer=flac",
+        "--enable-muxer=wav",
+        "--enable-muxer=adts",
+        "--enable-muxer=mp4",
+        
+        # === ENABLE AUDIO PARSERS ===
+        "--enable-parser=aac*",
+        "--enable-parser=mpegaudio",
+        "--enable-parser=opus",
+        "--enable-parser=vorbis",
+        "--enable-parser=flac",
     ]
 
     packages = []
@@ -278,6 +387,17 @@ def main():
             dirs_to_archive.append(d)
 
     run(["tar", "czvf", output_tarball, "-C", dest_dir] + dirs_to_archive)
+    
+    print("")
+    print("=" * 50)
+    print("✓ Ultra-minimal audio-only build completed!")
+    print("✓ Video codecs: DISABLED")
+    print("✓ Image formats: DISABLED")
+    print("✓ Network protocols: DISABLED")
+    print("✓ Hardware acceleration: DISABLED")
+    print("")
+    print("Only audio processing is available.")
+    print("=" * 50)
 
 
 if __name__ == "__main__":
